@@ -71,16 +71,10 @@ bot.on("message", async (msg) => {
 
     // LOGIKA: /DOWNLOAD (GENERATE PDF)
   } else if (text === "/download") {
-    bot.sendMessage(
-      chatId,
-      "⏳ Sedang menyiapkan laporan PDF, mohon tunggu..."
-    );
-
     try {
       const userSnapshot = await db
         .collection("users")
         .where("guardianChatId", "==", chatId.toString())
-        .limit(1)
         .get();
 
       if (userSnapshot.empty) {
@@ -90,8 +84,11 @@ bot.on("message", async (msg) => {
         );
       }
 
-      const userData = userSnapshot.docs[0].data();
-      const history = userData.blockedHistory || [];
+      const userData = userSnapshot.docs[userSnapshot.docs.length - 1].data();
+
+      const history = Array.isArray(userData.blockedHistory)
+        ? userData.blockedHistory
+        : [];
 
       if (history.length === 0) {
         return bot.sendMessage(
