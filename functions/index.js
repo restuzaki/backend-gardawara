@@ -159,20 +159,27 @@ app.get("/", (req, res) => res.send("Server JudiGuard Aktif! 🚀"));
 
 // 1. API: UPDATE HISTORY (Sinkronisasi dari Flutter)
 app.post("/update-history", async (req, res) => {
-  const { userId, blockedHistory } = req.body;
-  if (!userId) return res.status(400).send("Missing data");
+  const { userId, blockedHistory, guardianChatId } = req.body;
+
+  if (!userId) return res.status(400).send("User ID missing");
 
   try {
-    await db.collection("users").doc(userId).set(
-      {
-        blockedHistory: blockedHistory,
-        lastSync: admin.firestore.FieldValue.serverTimestamp(),
-      },
-      { merge: true }
-    );
-    res.send("History synced");
-  } catch (e) {
-    res.status(500).send(e.message);
+    await db
+      .collection("users")
+      .doc(userId)
+      .set(
+        {
+          blockedHistory: blockedHistory,
+          guardianChatId: guardianChatId ? guardianChatId.toString() : null,
+          lastSync: admin.firestore.FieldValue.serverTimestamp(),
+        },
+        { merge: true }
+      );
+
+    res.send("History Updated");
+  } catch (error) {
+    console.error("Gagal update history:", error);
+    res.status(500).send(error.message);
   }
 });
 
