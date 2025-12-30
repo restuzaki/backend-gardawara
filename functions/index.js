@@ -183,6 +183,24 @@ app.post("/update-history", async (req, res) => {
   }
 });
 
+app.get("/user-status/:userId", async (req, res) => {
+  try {
+    const doc = await db.collection("users").doc(req.params.userId).get();
+    if (doc.exists) {
+      const data = doc.data();
+      res.json({
+        exists: true,
+        guardianChatId: data.guardianChatId,
+        userName: data.userName,
+      });
+    } else {
+      res.status(404).json({ exists: false });
+    }
+  } catch (error) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
 // 2. API: HEARTBEAT (Dipanggil dari Flutter)
 app.post("/heartbeat", async (req, res) => {
   const { userId, guardianChatId, userName } = req.body;
