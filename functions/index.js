@@ -97,7 +97,7 @@ app.post("/heartbeat", async (req, res) => {
 
 // 2. API: CHECKER (Cron-job)
 app.get("/check-users", async (req, res) => {
-  const threshold = moment().subtract(3, "hours");
+  const threshold = moment().subtract(1, "hours");
   const snapshot = await db
     .collection("users")
     .where("lastHeartbeat", "<", threshold.toDate())
@@ -136,7 +136,9 @@ app.get("/verify-guard/:chatId", async (req, res) => {
 });
 
 async function sendTelegramAlert(chatId, userName) {
-  const message = `⚠️ *PERINGATAN* ⚠️\nUser: ${userName} offline lebih dari 3 jam!`;
+  const data = doc.data();
+  const lastSeen = moment(data.lastHeartbeat.toDate()).format("HH:mm [WIB]");
+  const message = `⚠️ *PERINGATAN* ⚠️\nPenjamin: ${data.userName} Aplikasi tidak aktif sejak jam ${lastSeen}.\nSegera cek kondisi user!`;
   try {
     await bot.sendMessage(chatId, message, { parse_mode: "Markdown" });
   } catch (e) {
