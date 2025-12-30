@@ -49,7 +49,7 @@ bot.on("message", async (msg) => {
         });
 
       const opts = { parse_mode: "Markdown" };
-      const responseText = `Halo! 👋\n\nID Telegram Anda adalah:\n\`${chatId}\`\n\nSilakan masukkan ID ini ke aplikasi *Garda Wara*.`;
+      const responseText = `Halo! 👋\n\nID Telegram Anda adalah:\n\`${chatId}\`\n\n(Ketuk angka di atas untuk menyalin)\n\nSilakan masukkan ID ini ke aplikasi *Garda Wara*.`;
 
       bot.sendMessage(chatId, responseText, opts);
       console.log(`User ${firstName} terdaftar: ${chatId}`);
@@ -75,6 +75,7 @@ app.post("/heartbeat", async (req, res) => {
   if (!userId) return res.status(400).send("User ID missing");
 
   try {
+    console.log(`Menerima heartbeat dari: ${userName} (${userId})`);
     await db
       .collection("users")
       .doc(userId)
@@ -89,6 +90,7 @@ app.post("/heartbeat", async (req, res) => {
       );
     res.send("Heartbeat OK");
   } catch (error) {
+    console.error("Gagal update heartbeat:", error);
     res.status(500).send(error.message);
   }
 });
@@ -163,7 +165,7 @@ async function sendTelegramAlert(chatId, userName, lastHeartbeat) {
 
   const message =
     `⚠️ *PERINGATAN KEAMANAN* ⚠️\n\n` +
-    `User: *${userName}*\n` +
+    `Penjamin User: *${userName}*\n` +
     `Status: *OFFLINE*\n` +
     `Terakhir Aktif: *${lastSeen}*\n\n` +
     `Aplikasi sudah tidak mengirim data selama lebih dari 1 jam. Mohon segera hubungi yang bersangkutan.`;
