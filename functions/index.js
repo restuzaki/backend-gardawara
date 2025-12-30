@@ -18,13 +18,11 @@ const token = process.env.TELEGRAM_TOKEN;
 const url =
   process.env.RENDER_EXTERNAL_URL || "https://api-judi-guard.onrender.com";
 
-// Inisialisasi Bot TANPA Polling
+// Inisialisasi Bot TANPA Polling (Menggunakan Webhook)
 const bot = new TelegramBot(token);
 
-// Set Webhook ke Telegram
 bot.setWebHook(`${url}/bot${token}`);
 
-// Endpoint khusus untuk menerima update dari Telegram
 app.post(`/bot${token}`, (req, res) => {
   bot.processUpdate(req.body);
   res.sendStatus(200);
@@ -71,7 +69,7 @@ bot.on("message", async (msg) => {
 // Health Check
 app.get("/", (req, res) => res.send("Server JudiGuard Aktif! 🚀"));
 
-// 1. API: HEARTBEAT (Dipanggil Flutter)
+// 1. API: HEARTBEAT (Dipanggil dari Flutter)
 app.post("/heartbeat", async (req, res) => {
   const { userId, guardianChatId, userName } = req.body;
   if (!userId) return res.status(400).send("User ID missing");
@@ -95,27 +93,46 @@ app.post("/heartbeat", async (req, res) => {
   }
 });
 
-// 2. API: CHECKER (Cron-job)
+// 2. API: CHECKER (Dipanggil oleh Cron-job setiap 10-14 menit)
 app.get("/check-users", async (req, res) => {
-  const threshold = moment().subtract(1, "hours");
-  const snapshot = await db
-    .collection("users")
-    .where("lastHeartbeat", "<", threshold.toDate())
-    .where("isAlertSent", "==", false)
-    .get();
+  try {
+    // Threshold diatur ke 1 jam
+    const threshold = moment().subtract(2, "hours").toDate();
 
-  if (snapshot.empty) return res.send("Aman.");
+    const snapshot = await db
+      .collection("users")
+      .where("lastHeartbeat", "<", threshold)
+      .where("isAlertSent", "==", false)
+      .get();
 
-  const batch = db.batch();
-  for (const doc of snapshot.docs) {
-    const data = doc.data();
-    if (data.guardianChatId) {
-      await sendTelegramAlert(data.guardianChatId, data.userName);
-      batch.update(doc.ref, { isAlertSent: true });
+    if (snapshot.empty) return res.send("Semua user terpantau aktif.");
+
+    const batch = db.batch();
+    const alertPromises = [];
+
+    for (const doc of snapshot.docs) {
+      const data = doc.data();
+      if (data.guardianChatId) {
+        // Kirim data lastHeartbeat ke fungsi alert
+        alertPromises.push(
+          sendTelegramAlert(
+            data.guardianChatId,
+            data.userName,
+            data.lastHeartbeat
+          )
+        );
+        batch.update(doc.ref, { isAlertSent: true });
+      }
     }
+
+    await Promise.all(alertPromises);
+    await batch.commit();
+
+    res.send(`${snapshot.size} peringatan telah dikirim.`);
+  } catch (error) {
+    console.error("Checker Error:", error);
+    res.status(500).send("Internal Server Error");
   }
-  await batch.commit();
-  res.send("Peringatan dikirim.");
 });
 
 // 3. API: VERIFY GUARD
@@ -135,16 +152,31 @@ app.get("/verify-guard/:chatId", async (req, res) => {
   }
 });
 
-async function sendTelegramAlert(chatId, userName) {
-  const data = doc.data();
-  const lastSeen = moment(data.lastHeartbeat.toDate()).format("HH:mm [WIB]");
-  const message = `⚠️ *PERINGATAN* ⚠️\nPenjamin: ${data.userName} Aplikasi tidak aktif sejak jam ${lastSeen}.\nSegera cek kondisi user!`;
+// ---------------------------------------------------------
+// FUNGSI PEMBANTU (HELPER)
+// ---------------------------------------------------------
+
+async function sendTelegramAlert(chatId, userName, lastHeartbeat) {
+  // Format waktu dari Firestore Timestamp
+  const lastSeen = lastHeartbeat
+    ? moment(lastHeartbeat.toDate()).format("HH:mm [WIB]")
+    : "Waktu tidak diketahui";
+
+  const message =
+    `⚠️ *PERINGATAN KEAMANAN* ⚠️\n\n` +
+    `User: *${userName}*\n` +
+    `Status: *OFFLINE*\n` +
+    `Terakhir Aktif: *${lastSeen}*\n\n` +
+    `Aplikasi sudah tidak mengirim data selama lebih dari 1 jam. Mohon segera hubungi yang bersangkutan.`;
+
   try {
     await bot.sendMessage(chatId, message, { parse_mode: "Markdown" });
   } catch (e) {
-    console.error("Gagal kirim alert:", e.message);
+    console.error(`Gagal mengirim pesan ke ${chatId}:`, e.message);
   }
 }
 
 const PORT = process.env.PORT || 3000;
-app.listen(PORT, () => console.log(`Server jalan di port ${PORT}`));
+app.listen(PORT, () =>
+  console.log(`Server JudiGuard berjalan pada port ${PORT}`)
+);
