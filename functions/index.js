@@ -96,8 +96,7 @@ app.post("/heartbeat", async (req, res) => {
 // 2. API: CHECKER (Dipanggil oleh Cron-job setiap 10-14 menit)
 app.get("/check-users", async (req, res) => {
   try {
-    // Threshold diatur ke 1 jam
-    const threshold = moment().subtract(2, "hours").toDate();
+    const threshold = moment().subtract(75, "minutes").toDate();
 
     const snapshot = await db
       .collection("users")
