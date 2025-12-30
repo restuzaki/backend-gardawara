@@ -23,19 +23,43 @@ const bot = new TelegramBot(TELEGRAM_BOT_TOKEN, { polling: true });
 // ---------------------------------------------------------
 // LOGIKA BOT: MENANGANI SEMUA PESAN MASUK
 // ---------------------------------------------------------
-bot.on("message", (msg) => {
+// ---------------------------------------------------------
+// LOGIKA BOT: MENANGANI SEMUA PESAN MASUK
+// ---------------------------------------------------------
+bot.on("message", async (msg) => {
+  // Tambahkan async di sini
   const chatId = msg.chat.id;
   const text = (msg.text || "").toString().toLowerCase().trim();
+  const firstName = msg.from.first_name || "User";
 
   if (text === "/start") {
-    const opts = { parse_mode: "Markdown" };
-    const responseText = `Halo! 👋\n\nID Telegram Anda Untuk Gardawara AI adalah:\n\`${chatId}\`\n\n(Ketuk angka di atas untuk menyalin)\n\nSilakan masukkan ID ini ke aplikasi *Garda Wara* sebagai Penjamin.`;
+    try {
+      // SIMPAN ID KE FIRESTORE agar bisa divalidasi nanti
+      await db
+        .collection("registered_guards")
+        .doc(chatId.toString())
+        .set({
+          chatId: chatId,
+          firstName: firstName,
+          username: msg.from.username || "",
+          registeredAt: admin.firestore.FieldValue.serverTimestamp(),
+        });
 
-    bot.sendMessage(chatId, responseText, opts);
-    console.log(`User ${msg.from.first_name} meminta ID: ${chatId}`);
+      const opts = { parse_mode: "Markdown" };
+      const responseText = `Halo! 👋\n\nID Telegram Anda Untuk Gardawara AI adalah:\n\`${chatId}\`\n\n(Ketuk angka di atas untuk menyalin)\n\nID Anda sudah terdaftar di sistem. Silakan masukkan ID ini ke aplikasi *Garda Wara* sebagai Penjamin.`;
+
+      bot.sendMessage(chatId, responseText, opts);
+      console.log(`User ${firstName} terdaftar dengan ID: ${chatId}`);
+    } catch (error) {
+      console.error("Gagal simpan ke Firestore:", error);
+      bot.sendMessage(
+        chatId,
+        "Terjadi kesalahan sistem saat mendaftarkan ID Anda."
+      );
+    }
   } else {
     const errorText =
-      "⛔ Maaf, saya adalah Bot Otomatis.\n\nSaya tidak dapat membalas chat manual. Silakan ketik atau klik /start untuk mendapatkan ID Penjamin Anda.";
+      "⛔ Silakan ketik /start untuk mendapatkan ID Penjamin Anda.";
     bot.sendMessage(chatId, errorText);
   }
 });
@@ -107,6 +131,32 @@ async function sendTelegramAlert(chatId, userName) {
     console.error("Gagal kirim telegram:", e.message);
   }
 }
+
+// ---------------------------------------------------------
+// 3. API: VERIFY GUARD
+// ---------------------------------------------------------
+app.get("/verify-guard/:chatId", async (req, res) => {
+  const { chatId } = req.params;
+
+  try {
+    const doc = await db.collection("registered_guards").doc(chatId).get();
+
+    if (doc.exists) {
+      return res.json({
+        valid: true,
+        message: "ID ditemukan",
+        data: doc.data(),
+      });
+    } else {
+      return res.status(404).json({
+        valid: false,
+        message: "ID tidak ditemukan. Silakan chat bot dulu.",
+      });
+    }
+  } catch (error) {
+    res.status(500).json({ valid: false, message: error.message });
+  }
+});
 
 const PORT = process.env.PORT || 3000;
 app.listen(PORT, () => console.log(`Server jalan di port ${PORT}`));
