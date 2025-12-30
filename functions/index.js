@@ -2,6 +2,8 @@ const express = require("express");
 const admin = require("firebase-admin");
 const moment = require("moment");
 const TelegramBot = require("node-telegram-bot-api");
+const PDFDocument = require("pdfkit");
+const fs = require("fs");
 require("dotenv").config();
 
 const app = express();
@@ -14,28 +16,37 @@ admin.initializeApp({
 });
 const db = admin.firestore();
 
+// --- KONFIGURASI BOT TELEGRAM ---
 const token = process.env.TELEGRAM_TOKEN;
 const url =
   process.env.RENDER_EXTERNAL_URL || "https://api-judi-guard.onrender.com";
-
-// Inisialisasi Bot TANPA Polling (Menggunakan Webhook)
 const bot = new TelegramBot(token);
 
+// Set Webhook
 bot.setWebHook(`${url}/bot${token}`);
 
+// --- FITUR: POPUP MENU COMMANDS ---
+bot.setMyCommands([
+  { command: "start", description: "Dapatkan ID Telegram Anda" },
+  { command: "download", description: "Unduh laporan PDF riwayat blokir" },
+  { command: "help", description: "Bantuan penggunaan bot" },
+]);
+
+// Endpoint untuk Webhook Telegram
 app.post(`/bot${token}`, (req, res) => {
   bot.processUpdate(req.body);
   res.sendStatus(200);
 });
 
 // ---------------------------------------------------------
-// LOGIKA BOT: MENANGANI SEMUA PESAN MASUK
+// LOGIKA BOT: MENANGANI PESAN MASUK
 // ---------------------------------------------------------
 bot.on("message", async (msg) => {
   const chatId = msg.chat.id;
   const text = (msg.text || "").toString().toLowerCase().trim();
   const firstName = msg.from.first_name || "User";
 
+  // LOGIKA: /START
   if (text === "/start") {
     try {
       await db
@@ -57,8 +68,85 @@ bot.on("message", async (msg) => {
       console.error("Firestore Error:", error);
       bot.sendMessage(chatId, "Terjadi kesalahan pendaftaran.");
     }
+
+    // LOGIKA: /DOWNLOAD (GENERATE PDF)
+  } else if (text === "/download") {
+    bot.sendMessage(
+      chatId,
+      "⏳ Sedang menyiapkan laporan PDF, mohon tunggu..."
+    );
+
+    try {
+      const userSnapshot = await db
+        .collection("users")
+        .where("guardianChatId", "==", chatId.toString())
+        .limit(1)
+        .get();
+
+      if (userSnapshot.empty) {
+        return bot.sendMessage(
+          chatId,
+          "❌ Anda belum terhubung dengan user manapun."
+        );
+      }
+
+      const userData = userSnapshot.docs[0].data();
+      const history = userData.blockedHistory || [];
+
+      if (history.length === 0) {
+        return bot.sendMessage(
+          chatId,
+          "📭 Belum ada riwayat situs yang diblokir."
+        );
+      }
+
+      const pdfPath = `./logs_${chatId}.pdf`;
+      const doc = new PDFDocument();
+      const stream = fs.createWriteStream(pdfPath);
+      doc.pipe(stream);
+
+      // Header PDF
+      doc
+        .fontSize(20)
+        .text("LAPORAN RIWAYAT BLOKIR SITUS", { align: "center" });
+      doc.fontSize(12).text(`User: ${userData.userName}`, { align: "center" });
+      doc.text(`Dicetak pada: ${moment().format("DD MMMM YYYY, HH:mm")}`, {
+        align: "center",
+      });
+      doc.moveDown();
+      doc.moveTo(50, doc.y).lineTo(550, doc.y).stroke();
+      doc.moveDown();
+
+      // Isi Riwayat
+      history.forEach((item, index) => {
+        doc.fontSize(10).text(`${index + 1}. [${item.time}] - ${item.url}`);
+        doc.moveDown(0.5);
+      });
+
+      doc.end();
+
+      stream.on("finish", async () => {
+        await bot.sendDocument(chatId, pdfPath, {
+          caption: `Berikut adalah log situs yang dikunjungi oleh Pengguna.`,
+        });
+        fs.unlinkSync(pdfPath);
+      });
+    } catch (error) {
+      console.error("PDF Error:", error);
+      bot.sendMessage(chatId, "⚠️ Terjadi kesalahan saat membuat PDF.");
+    }
+
+    // LOGIKA: HELP ATAU LAINNYA
+  } else if (text === "/help") {
+    bot.sendMessage(
+      chatId,
+      "Gunakan /start untuk melihat ID atau /download untuk mengunduh laporan."
+    );
   } else {
-    bot.sendMessage(chatId, "⛔ Ketik /start untuk mendapatkan ID.");
+    bot.sendMessage(
+      chatId,
+      "⛔ Ketik /start untuk mendapatkan ID atau /download untuk mengunduh laporan. "
+    );
   }
 });
 
@@ -69,7 +157,26 @@ bot.on("message", async (msg) => {
 // Health Check
 app.get("/", (req, res) => res.send("Server JudiGuard Aktif! 🚀"));
 
-// 1. API: HEARTBEAT (Dipanggil dari Flutter)
+// 1. API: UPDATE HISTORY (Sinkronisasi dari Flutter)
+app.post("/update-history", async (req, res) => {
+  const { userId, blockedHistory } = req.body;
+  if (!userId) return res.status(400).send("Missing data");
+
+  try {
+    await db.collection("users").doc(userId).set(
+      {
+        blockedHistory: blockedHistory,
+        lastSync: admin.firestore.FieldValue.serverTimestamp(),
+      },
+      { merge: true }
+    );
+    res.send("History synced");
+  } catch (e) {
+    res.status(500).send(e.message);
+  }
+});
+
+// 2. API: HEARTBEAT (Dipanggil dari Flutter)
 app.post("/heartbeat", async (req, res) => {
   const { userId, guardianChatId, userName } = req.body;
   if (!userId) return res.status(400).send("User ID missing");
@@ -95,11 +202,10 @@ app.post("/heartbeat", async (req, res) => {
   }
 });
 
-// 2. API: CHECKER (Dipanggil oleh Cron-job setiap 10-14 menit)
+// 3. API: CHECKER (Dipanggil oleh Cron-job)
 app.get("/check-users", async (req, res) => {
   try {
     const threshold = moment().subtract(75, "minutes").toDate();
-
     const snapshot = await db
       .collection("users")
       .where("lastHeartbeat", "<", threshold)
@@ -114,7 +220,6 @@ app.get("/check-users", async (req, res) => {
     for (const doc of snapshot.docs) {
       const data = doc.data();
       if (data.guardianChatId) {
-        // Kirim data lastHeartbeat ke fungsi alert
         alertPromises.push(
           sendTelegramAlert(
             data.guardianChatId,
@@ -128,7 +233,6 @@ app.get("/check-users", async (req, res) => {
 
     await Promise.all(alertPromises);
     await batch.commit();
-
     res.send(`${snapshot.size} peringatan telah dikirim.`);
   } catch (error) {
     console.error("Checker Error:", error);
@@ -136,7 +240,7 @@ app.get("/check-users", async (req, res) => {
   }
 });
 
-// 3. API: VERIFY GUARD
+// 4. API: VERIFY GUARD
 app.get("/verify-guard/:chatId", async (req, res) => {
   try {
     const doc = await db
@@ -158,7 +262,6 @@ app.get("/verify-guard/:chatId", async (req, res) => {
 // ---------------------------------------------------------
 
 async function sendTelegramAlert(chatId, userName, lastHeartbeat) {
-  // Format waktu dari Firestore Timestamp
   const lastSeen = lastHeartbeat
     ? moment(lastHeartbeat.toDate()).format("HH:mm [WIB]")
     : "Waktu tidak diketahui";
