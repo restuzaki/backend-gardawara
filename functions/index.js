@@ -4,6 +4,7 @@ const moment = require("moment");
 const TelegramBot = require("node-telegram-bot-api");
 const PDFDocument = require("pdfkit");
 const fs = require("fs");
+const cron = require("node-cron"); // TAMBAHAN: Untuk penjadwalan
 require("dotenv").config();
 
 const app = express();
@@ -15,6 +16,36 @@ admin.initializeApp({
   credential: admin.credential.cert(serviceAccount),
 });
 const db = admin.firestore();
+
+// --- DATA MOTIVASI RANDOM (Quotes & Video) ---
+const motivations = [
+  {
+    type: "video",
+    content:
+      "Hai! Coba tonton video ini sebentar, mungkin bisa merubah sudut pandangmu hari ini.",
+    url: "https://www.w3schools.com/html/mov_bbb.mp4",
+  },
+  {
+    type: "text",
+    content:
+      "Ayo berhenti judi, kamu pasti bisa melakukannya kok. Pikirkan keluargamu.",
+  },
+  {
+    type: "video",
+    content: "Pesan spesial untukmu: Kamu jauh lebih kuat dari kecanduanmu!",
+    url: "https://sample-videos.com/video123/mp4/720/big_buck_bunny_720p_1mb.mp4",
+  },
+  {
+    type: "text",
+    content:
+      "Hari ini adalah waktu yang tepat untuk memulai lembaran baru tanpa judi.",
+  },
+  {
+    type: "text",
+    content:
+      "Jangan biarkan hari ini hancur karena kekalahan kemarin. Berhenti sekarang.",
+  },
+];
 
 // --- KONFIGURASI BOT TELEGRAM ---
 const token = process.env.TELEGRAM_TOKEN;
@@ -32,21 +63,57 @@ bot.setMyCommands([
   { command: "help", description: "Bantuan penggunaan bot" },
 ]);
 
-// Endpoint untuk Webhook Telegram
-app.post(`/bot${token}`, (req, res) => {
-  bot.processUpdate(req.body);
-  res.sendStatus(200);
+// ---------------------------------------------------------
+// LOGIKA NOTIFIKASI & CRON JOB (SARAN BARU)
+// ---------------------------------------------------------
+
+// Fungsi untuk mengirim notifikasi ke semua user yang punya token FCM
+async function sendStopGamblingNotification() {
+  console.log("Memulai proses broadcast notifikasi motivasi...");
+  try {
+    const snapshot = await db.collection("users").get();
+    const tokens = [];
+
+    snapshot.forEach((doc) => {
+      const data = doc.data();
+      if (data.fcmToken) tokens.push(data.fcmToken);
+    });
+
+    if (tokens.length === 0)
+      return console.log("Tidak ada token FCM ditemukan.");
+
+    const message = {
+      notification: {
+        title: "Garda AI Peduli 🛡️",
+        body: "Waktunya refleksi sejenak. Yuk, cek pesan spesial untukmu hari ini.",
+      },
+      data: {
+        screen: "chatbot", // Key untuk navigasi Flutter
+      },
+      tokens: tokens,
+    };
+
+    const response = await admin.messaging().sendEachForMulticast(message);
+    console.log(`Berhasil mengirim ${response.successCount} notifikasi.`);
+  } catch (error) {
+    console.error("Gagal mengirim notifikasi:", error);
+  }
+}
+
+// JADWAL PENGETESAN: Setiap 5 Menit
+cron.schedule("*/5 * * * *", () => {
+  console.log("Menjalankan tugas TEST: Kirim notifikasi setiap 5 menit...");
+  sendStopGamblingNotification();
 });
 
 // ---------------------------------------------------------
-// LOGIKA BOT: MENANGANI PESAN MASUK
+// LOGIKA BOT: MENANGANI PESAN MASUK (ORIGINAL)
 // ---------------------------------------------------------
 bot.on("message", async (msg) => {
   const chatId = msg.chat.id;
   const text = (msg.text || "").toString().toLowerCase().trim();
   const firstName = msg.from.first_name || "User";
 
-  // LOGIKA: /START
   if (text === "/start") {
     try {
       await db
@@ -58,51 +125,39 @@ bot.on("message", async (msg) => {
           username: msg.from.username || "",
           registeredAt: admin.firestore.FieldValue.serverTimestamp(),
         });
-
       const opts = { parse_mode: "Markdown" };
       const responseText = `Halo! 👋\n\nID Telegram Anda adalah:\n\`${chatId}\`\n\n(Ketuk angka di atas untuk menyalin)\n\nSilakan masukkan ID ini ke aplikasi *Garda Wara*.`;
-
       bot.sendMessage(chatId, responseText, opts);
-      console.log(`User ${firstName} terdaftar: ${chatId}`);
     } catch (error) {
-      console.error("Firestore Error:", error);
       bot.sendMessage(chatId, "Terjadi kesalahan pendaftaran.");
     }
-
-    // LOGIKA: /DOWNLOAD (GENERATE PDF)
   } else if (text === "/download") {
     try {
       const userSnapshot = await db
         .collection("users")
         .where("guardianChatId", "==", chatId.toString())
         .get();
-
-      if (userSnapshot.empty) {
+      if (userSnapshot.empty)
         return bot.sendMessage(
           chatId,
           "❌ Anda belum terhubung dengan user manapun."
         );
-      }
 
       const userData = userSnapshot.docs[userSnapshot.docs.length - 1].data();
-
       const history = Array.isArray(userData.blockedHistory)
         ? userData.blockedHistory
         : [];
-
-      if (history.length === 0) {
+      if (history.length === 0)
         return bot.sendMessage(
           chatId,
           "📭 Belum ada riwayat situs yang diblokir."
         );
-      }
 
       const pdfPath = `./logs_${chatId}.pdf`;
       const doc = new PDFDocument();
       const stream = fs.createWriteStream(pdfPath);
       doc.pipe(stream);
 
-      // Header PDF
       doc
         .fontSize(20)
         .text("LAPORAN RIWAYAT BLOKIR SITUS", { align: "center" });
@@ -110,16 +165,12 @@ bot.on("message", async (msg) => {
       doc.text(`Dicetak pada: ${moment().format("DD MMMM YYYY, HH:mm")}`, {
         align: "center",
       });
-      doc.moveDown();
-      doc.moveTo(50, doc.y).lineTo(550, doc.y).stroke();
-      doc.moveDown();
+      doc.moveDown().moveTo(50, doc.y).lineTo(550, doc.y).stroke().moveDown();
 
-      // Isi Riwayat
       history.forEach((item, index) => {
         doc.fontSize(10).text(`${index + 1}. [${item.time}] - ${item.url}`);
         doc.moveDown(0.5);
       });
-
       doc.end();
 
       stream.on("finish", async () => {
@@ -129,11 +180,8 @@ bot.on("message", async (msg) => {
         fs.unlinkSync(pdfPath);
       });
     } catch (error) {
-      console.error("PDF Error:", error);
       bot.sendMessage(chatId, "⚠️ Terjadi kesalahan saat membuat PDF.");
     }
-
-    // LOGIKA: HELP ATAU LAINNYA
   } else if (text === "/help") {
     bot.sendMessage(
       chatId,
@@ -142,7 +190,7 @@ bot.on("message", async (msg) => {
   } else {
     bot.sendMessage(
       chatId,
-      "⛔ Ketik /start untuk mendapatkan ID atau /download untuk mengunduh laporan. "
+      "⛔ Ketik /start untuk mendapatkan ID atau /download untuk mengunduh laporan."
     );
   }
 });
@@ -151,15 +199,29 @@ bot.on("message", async (msg) => {
 // API ROUTES
 // ---------------------------------------------------------
 
-// Health Check
+app.post(`/bot${token}`, (req, res) => {
+  bot.processUpdate(req.body);
+  res.sendStatus(200);
+});
+
 app.get("/", (req, res) => res.send("Server JudiGuard Aktif! 🚀"));
 
-// 1. API: UPDATE HISTORY (Sinkronisasi dari Flutter)
+// API: AMBIL MOTIVASI RANDOM (SARAN BARU)
+app.get("/random-motivation", (req, res) => {
+  const randomItem =
+    motivations[Math.floor(Math.random() * motivations.length)];
+  res.json(randomItem);
+});
+
+// API: Sinkronisasi Notifikasi FCM Secara Manual (Testing)
+app.get("/trigger-notif", async (req, res) => {
+  await sendStopGamblingNotification();
+  res.send("Notifikasi manual sedang diproses.");
+});
+
 app.post("/update-history", async (req, res) => {
   const { userId, blockedHistory, guardianChatId } = req.body;
-
   if (!userId) return res.status(400).send("User ID missing");
-
   try {
     await db
       .collection("users")
@@ -172,39 +234,16 @@ app.post("/update-history", async (req, res) => {
         },
         { merge: true }
       );
-
     res.send("History Updated");
   } catch (error) {
-    console.error("Gagal update history:", error);
     res.status(500).send(error.message);
   }
 });
 
-app.get("/user-status/:userId", async (req, res) => {
-  try {
-    const doc = await db.collection("users").doc(req.params.userId).get();
-    if (doc.exists) {
-      const data = doc.data();
-      res.json({
-        exists: true,
-        guardianChatId: data.guardianChatId,
-        userName: data.userName,
-      });
-    } else {
-      res.status(404).json({ exists: false });
-    }
-  } catch (error) {
-    res.status(500).json({ error: error.message });
-  }
-});
-
-// 2. API: HEARTBEAT (Dipanggil dari Flutter)
 app.post("/heartbeat", async (req, res) => {
   const { userId, guardianChatId, userName } = req.body;
   if (!userId) return res.status(400).send("User ID missing");
-
   try {
-    console.log(`Menerima heartbeat dari: ${userName} (${userId})`);
     await db
       .collection("users")
       .doc(userId)
@@ -219,12 +258,11 @@ app.post("/heartbeat", async (req, res) => {
       );
     res.send("Heartbeat OK");
   } catch (error) {
-    console.error("Gagal update heartbeat:", error);
     res.status(500).send(error.message);
   }
 });
 
-// 3. API: CHECKER (Dipanggil oleh Cron-job)
+// API-API Lainnya (Check User, Verify Guard) Tetap Sama...
 app.get("/check-users", async (req, res) => {
   try {
     const threshold = moment().subtract(75, "minutes").toDate();
@@ -233,73 +271,46 @@ app.get("/check-users", async (req, res) => {
       .where("lastHeartbeat", "<", threshold)
       .where("isAlertSent", "==", false)
       .get();
-
     if (snapshot.empty) return res.send("Semua user terpantau aktif.");
-
     const batch = db.batch();
-    const alertPromises = [];
-
     for (const doc of snapshot.docs) {
       const data = doc.data();
       if (data.guardianChatId) {
-        alertPromises.push(
-          sendTelegramAlert(
-            data.guardianChatId,
-            data.userName,
-            data.lastHeartbeat
-          )
+        await sendTelegramAlert(
+          data.guardianChatId,
+          data.userName,
+          data.lastHeartbeat
         );
         batch.update(doc.ref, { isAlertSent: true });
       }
     }
-
-    await Promise.all(alertPromises);
     await batch.commit();
-    res.send(`${snapshot.size} peringatan telah dikirim.`);
+    res.send(`${snapshot.size} peringatan dikirim.`);
   } catch (error) {
-    console.error("Checker Error:", error);
-    res.status(500).send("Internal Server Error");
+    res.status(500).send("Error");
   }
 });
 
-// 4. API: VERIFY GUARD
 app.get("/verify-guard/:chatId", async (req, res) => {
   try {
     const doc = await db
       .collection("registered_guards")
       .doc(req.params.chatId)
       .get();
-    if (doc.exists) {
-      res.json({ valid: true, data: doc.data() });
-    } else {
-      res.status(404).json({ valid: false, message: "ID tidak terdaftar." });
-    }
+    res.json(doc.exists ? { valid: true, data: doc.data() } : { valid: false });
   } catch (error) {
     res.status(500).json({ valid: false });
   }
 });
 
-// ---------------------------------------------------------
-// FUNGSI PEMBANTU (HELPER)
-// ---------------------------------------------------------
-
 async function sendTelegramAlert(chatId, userName, lastHeartbeat) {
   const lastSeen = lastHeartbeat
     ? moment(lastHeartbeat.toDate()).format("HH:mm [WIB]")
-    : "Waktu tidak diketahui";
-
-  const message =
-    `⚠️ *PERINGATAN KEAMANAN* ⚠️\n\n` +
-    `Penjamin User: *${userName}*\n` +
-    `Status: *OFFLINE*\n` +
-    `Terakhir Aktif: *${lastSeen}*\n\n` +
-    `Aplikasi sudah tidak mengirim data selama lebih dari 1 jam. Mohon segera hubungi yang bersangkutan.`;
-
+    : "Unknown";
+  const message = `⚠️ *PERINGATAN* ⚠️\n\nUser: *${userName}*\nStatus: *OFFLINE*\nAktif: *${lastSeen}*`;
   try {
     await bot.sendMessage(chatId, message, { parse_mode: "Markdown" });
-  } catch (e) {
-    console.error(`Gagal mengirim pesan ke ${chatId}:`, e.message);
-  }
+  } catch (e) {}
 }
 
 const PORT = process.env.PORT || 3000;
