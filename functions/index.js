@@ -90,7 +90,6 @@ async function sendStopGamblingNotification() {
   try {
     const snapshot = await db.collection("users").get();
     const tokens = [];
-
     snapshot.forEach((doc) => {
       const data = doc.data();
       if (data.fcmToken) tokens.push(data.fcmToken);
@@ -98,17 +97,27 @@ async function sendStopGamblingNotification() {
 
     if (tokens.length === 0) return "Tidak ada token FCM ditemukan.";
 
+    // --- PERBAIKAN: Pilih motivasi random di sini ---
+    const randomMotiv =
+      motivations[Math.floor(Math.random() * motivations.length)];
+
     const message = {
       notification: {
         title: "Garda AI Peduli 🛡️",
-        body: "Waktunya refleksi sejenak. Yuk, cek pesan spesial untukmu hari ini.",
+        body: randomMotiv.content, // Langsung tampilkan isi motivasi di notif
       },
-      data: { screen: "chatbot" },
+      data: {
+        screen: "chatbot",
+        // Kirim detail konten agar Flutter tinggal pakai
+        content: randomMotiv.content,
+        type: randomMotiv.type,
+        url: randomMotiv.url || "",
+      },
       tokens: tokens,
     };
 
     const response = await admin.messaging().sendEachForMulticast(message);
-    return `Berhasil mengirim ${response.successCount} notifikasi.`;
+    return `Berhasil mengirim ${response.successCount} notifikasi. Content: ${randomMotiv.content}`;
   } catch (error) {
     console.error("FCM Error:", error);
     throw error;
