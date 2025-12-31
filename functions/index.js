@@ -16,35 +16,7 @@ admin.initializeApp({
 });
 const db = admin.firestore();
 
-// --- DATA MOTIVASI RANDOM ---
-const motivations = [
-  {
-    type: "video",
-    content:
-      "Hai! Coba tonton video ini sebentar, mungkin bisa merubah sudut pandangmu hari ini.",
-    url: "https://www.w3schools.com/html/mov_bbb.mp4",
-  },
-  {
-    type: "text",
-    content:
-      "Ayo berhenti judi, kamu pasti bisa melakukannya kok. Pikirkan keluargamu.",
-  },
-  {
-    type: "video",
-    content: "Pesan spesial untukmu: Kamu jauh lebih kuat dari kecanduanmu!",
-    url: "https://sample-videos.com/video123/mp4/720/big_buck_bunny_720p_1mb.mp4",
-  },
-  {
-    type: "text",
-    content:
-      "Hari ini adalah waktu yang tepat untuk memulai lembaran baru tanpa judi.",
-  },
-  {
-    type: "text",
-    content:
-      "Jangan biarkan hari ini hancur karena kekalahan kemarin. Berhenti sekarang.",
-  },
-];
+const motivations = JSON.parse(process.env.MOTIVATIONS_DATA || "[]");
 
 // --- KONFIGURASI BOT TELEGRAM ---
 const token = process.env.TELEGRAM_TOKEN;
