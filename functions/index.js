@@ -76,11 +76,11 @@ async function sendStopGamblingNotification() {
     const message = {
       notification: {
         title: "Garda AI Peduli 🛡️",
-        body: randomMotiv.content, // Langsung tampilkan isi motivasi di notif
+        body: randomMotiv.content,
       },
       data: {
         screen: "chatbot",
-        // Kirim detail konten agar Flutter tinggal pakai
+
         content: randomMotiv.content,
         type: randomMotiv.type,
         url: randomMotiv.url || "",
@@ -271,22 +271,24 @@ app.post("/update-history", async (req, res) => {
 app.post("/heartbeat", async (req, res) => {
   const { userId, guardianChatId, userName, fcmToken } = req.body;
   if (!userId) return res.status(400).send("User ID missing");
+
   try {
-    await db
-      .collection("users")
-      .doc(userId)
-      .set(
-        {
-          userName: userName || "No Name",
-          guardianChatId: guardianChatId,
-          fcmToken: fcmToken || null, // Simpan token untuk notifikasi
-          lastHeartbeat: admin.firestore.FieldValue.serverTimestamp(),
-          isAlertSent: false,
-        },
-        { merge: true }
-      );
+    const updateData = {
+      userName: userName || "No Name",
+      guardianChatId: guardianChatId,
+      lastHeartbeat: admin.firestore.FieldValue.serverTimestamp(),
+      isAlertSent: false,
+    };
+
+    if (fcmToken) {
+      updateData.fcmToken = fcmToken;
+    }
+
+    await db.collection("users").doc(userId).set(updateData, { merge: true });
+
     res.send("Heartbeat OK");
   } catch (e) {
+    console.error("Heartbeat Error:", e);
     res.status(500).send(e.message);
   }
 });
